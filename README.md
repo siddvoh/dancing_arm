@@ -10,11 +10,21 @@ Beat-synced dance for the UFactory xArm 7-DOF. Plays a song, detects beats with 
 ## Install
 
 ```bash
-# macOS audio backend
-brew install portaudio
+# macOS audio + video backends
+brew install portaudio ffmpeg
 
 # python deps
 pip install -r requirements.txt
+```
+
+`ffmpeg` is required for muxing the song audio into the saved webcam video.
+
+If you already have the `semvs` conda env from `visual_servoing_for_suction_grippers`, `xarm-python-sdk` and `opencv-python` are already installed; you only need to add the audio stack:
+
+```bash
+conda activate semvs
+brew install portaudio ffmpeg
+pip install librosa sounddevice soundfile
 ```
 
 ## Run
@@ -25,10 +35,19 @@ Always start with a dry run to inspect the choreography without moving the arm:
 python dance.py /path/to/song.mp3 --dry-run
 ```
 
-When you're happy, connect to the arm:
+When you're happy, connect to the arm. Webcam recording is on by default — the script saves an `.mp4` of the dance with the song muxed in as audio:
 
 ```bash
-python dance.py /path/to/song.mp3 --ip 192.168.1.200
+python dance.py /path/to/song.mp3
+```
+
+Output file is auto-named `dance_<song>_<timestamp>.mp4` in the current directory. Override with `--record-path out.mp4` or disable with `--no-record`.
+
+For the ZED Mini in webcam mode, point at the right camera index:
+
+```bash
+python dance.py song.mp3 --camera 0     # try 0 first
+python dance.py song.mp3 --camera 1     # if 0 is the laptop's FaceTime camera
 ```
 
 For high-BPM songs, dance on every other beat:

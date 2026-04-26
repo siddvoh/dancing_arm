@@ -2,4 +2,5 @@ numpy
 librosa>=0.10
 soundfile
 sounddevice
+opencv-python
 xarm-python-sdk

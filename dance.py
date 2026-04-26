@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
+import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
 
@@ -161,6 +164,115 @@ class ArmDancer:
             self._arm.disconnect()
 
 
+class Recorder:
+    """Webcam recorder that runs in a background thread, then muxes the
+    original audio file into the saved video via ffmpeg.
+
+    The ZED Mini in webcam mode appears as a normal camera index; pass
+    `camera_index=0` (default) or `1` if the built-in FaceTime camera is also
+    enumerated.
+    """
+
+    def __init__(self, camera_index, silent_path, fps=30):
+        self.camera_index = camera_index
+        self.silent_path = silent_path
+        self.fps = fps
+        self.cap = None
+        self.writer = None
+        self.thread = None
+        self.stop_event = threading.Event()
+        self._opened = False
+
+    def open(self):
+        try:
+            import cv2
+        except ImportError:
+            print("opencv-python not installed; recording disabled.")
+            return False
+
+        self.cap = cv2.VideoCapture(self.camera_index)
+        if not self.cap.isOpened():
+            print(f"could not open camera {self.camera_index}; try --camera 1 if the ZED is on a different index.")
+            return False
+
+        # Warm up the camera and discard the first few frames; first reads on
+        # macOS can be slow and may return black frames.
+        for _ in range(5):
+            self.cap.read()
+
+        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self.writer = cv2.VideoWriter(self.silent_path, fourcc, self.fps, (w, h))
+        if not self.writer.isOpened():
+            print("VideoWriter failed to open; recording disabled.")
+            self.cap.release()
+            self.cap = None
+            return False
+
+        self._opened = True
+        return True
+
+    def _loop(self):
+        period = 1.0 / self.fps
+        next_due = time.monotonic()
+        while not self.stop_event.is_set():
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+            self.writer.write(frame)
+            next_due += period
+            sleep_for = next_due - time.monotonic()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                # We're behind schedule; reset the cadence anchor so we don't
+                # spiral into runaway capture attempts.
+                next_due = time.monotonic()
+
+    def start(self):
+        if not self._opened:
+            return
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=3.0)
+        if self.writer is not None:
+            self.writer.release()
+        if self.cap is not None:
+            self.cap.release()
+
+
+def mux_audio(silent_video, audio_path, output_path):
+    """Combine the silent webcam video with the song audio into one mp4.
+
+    Returns True if the muxed file was produced.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", silent_video,
+        "-i", audio_path,
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-shortest",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except FileNotFoundError:
+        print("ffmpeg not found. install with `brew install ffmpeg`. silent video kept at:", silent_video)
+        return False
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode(errors="ignore") if e.stderr else ""
+        print(f"ffmpeg failed: {err[-400:]}")
+        print("silent video kept at:", silent_video)
+        return False
+
+
 def play_audio_async(samples, sr):
     """Start audio playback in the background. Returns a stop() callable."""
     try:
@@ -189,6 +301,9 @@ def run_dance(
     speed=DEFAULT_SPEED_DEG_S,
     acc=DEFAULT_ACC_DEG_S2,
     no_audio=False,
+    record_path=None,
+    camera_index=0,
+    fps=30,
 ):
     print(f"loading + analyzing: {audio_path}")
     beat_times, tempo, sr, audio = detect_beats(audio_path, every_nth=every_nth)
@@ -207,8 +322,21 @@ def run_dance(
     print("moving to home pose...")
     dancer.go_home()
 
+    recorder = None
+    silent_path = None
+    if record_path:
+        silent_path = record_path + ".silent.mp4"
+        rec = Recorder(camera_index, silent_path, fps=fps)
+        if rec.open():
+            recorder = rec
+            print(f"recording from camera {camera_index} -> {record_path}")
+        else:
+            print("recording skipped")
+
     stop_audio = (lambda: None)
     try:
+        if recorder is not None:
+            recorder.start()
         if not no_audio:
             stop_audio = play_audio_async(audio, sr)
         t0 = time.monotonic()
@@ -242,8 +370,21 @@ def run_dance(
         print("\ninterrupted by user")
     finally:
         stop_audio()
+        if recorder is not None:
+            recorder.stop()
         print("returning to zero pose...")
         dancer.shutdown()
+
+        if recorder is not None and silent_path and os.path.exists(silent_path):
+            print("muxing audio into video...")
+            ok = mux_audio(silent_path, audio_path, record_path)
+            if ok:
+                try:
+                    os.remove(silent_path)
+                except OSError:
+                    pass
+                print(f"saved: {record_path}")
+
         print("done.")
 
 
@@ -261,6 +402,14 @@ def parse_args():
     p.add_argument("--acc", type=float, default=DEFAULT_ACC_DEG_S2, help="joint accel deg/s^2")
     p.add_argument("--dry-run", action="store_true", help="don't connect to the arm; print what would happen")
     p.add_argument("--no-audio", action="store_true", help="skip audio playback (still uses beat times)")
+    p.add_argument("--no-record", action="store_true", help="disable webcam recording")
+    p.add_argument(
+        "--record-path",
+        default=None,
+        help="output mp4 path (default: dance_<song>_<timestamp>.mp4 in cwd)",
+    )
+    p.add_argument("--camera", type=int, default=0, help="webcam index (try 1 if 0 is the laptop's camera)")
+    p.add_argument("--fps", type=int, default=30, help="video frame rate")
     return p.parse_args()
 
 
@@ -273,6 +422,16 @@ def main():
             file=sys.stderr,
         )
         sys.exit(2)
+
+    if args.no_record:
+        record_path = None
+    elif args.record_path:
+        record_path = args.record_path
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = os.path.splitext(os.path.basename(args.audio))[0]
+        record_path = f"dance_{base}_{ts}.mp4"
+
     run_dance(
         audio_path=args.audio,
         arm_ip=args.ip,
@@ -281,6 +440,9 @@ def main():
         speed=args.speed,
         acc=args.acc,
         no_audio=args.no_audio,
+        record_path=record_path,
+        camera_index=args.camera,
+        fps=args.fps,
     )
 
 
