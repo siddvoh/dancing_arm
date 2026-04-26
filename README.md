@@ -4,7 +4,7 @@ Beat-synced dance for the UFactory xArm 7-DOF. Plays a song, detects beats with 
 
 ## Hardware
 
-- UFactory xArm (7 joints) on the LAN, default IP `192.168.1.200`.
+- UFactory xArm (7 joints) on the LAN, default IP `192.168.1.248`.
 - The script uses joint-angle control in degrees via `xarm-python-sdk`.
 
 ## Install

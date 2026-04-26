@@ -483,7 +483,7 @@ def parse_args():
         default=DEFAULT_AUDIO,
         help=f"path to audio file (default: bundled samples/eliveta.mp3)",
     )
-    p.add_argument("--ip", default="192.168.1.200", help="xArm IP (default: 192.168.1.200)")
+    p.add_argument("--ip", default="192.168.1.248", help="xArm IP (default: 192.168.1.248)")
     p.add_argument(
         "--every-nth",
         type=int,
