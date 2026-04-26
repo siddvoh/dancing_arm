@@ -205,14 +205,15 @@ class KeyboardWatcher:
 
             self._fd = sys.stdin.fileno()
             if not os.isatty(self._fd):
-                return
+                return False
             self._old_tc = termios.tcgetattr(self._fd)
             tty.setcbreak(self._fd)
         except Exception:
             self._old_tc = None
-            return
+            return False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        return True
 
     def _loop(self):
         while not self.stop_event.is_set():
@@ -237,17 +238,26 @@ class KeyboardWatcher:
                 pass
 
 
-def install_sigint_handler(stop_event):
-    """First Ctrl-C: graceful stop via stop_event. Second Ctrl-C: hard exit."""
+def install_sigint_handler(stop_event, on_hard_exit=None):
+    """First Ctrl-C: set stop_event AND raise KeyboardInterrupt so any blocking
+    call in the main thread (xarm wait, time.sleep, etc.) unwinds immediately.
+    Second Ctrl-C: hard exit. on_hard_exit lets us restore the terminal first.
+    """
     state = {"once": False}
 
     def handler(signum, frame):
         if state["once"]:
-            print("\n[ctrl-c again] hard exit")
+            if on_hard_exit is not None:
+                try:
+                    on_hard_exit()
+                except Exception:
+                    pass
+            print("\n[ctrl-c again] hard exit", file=sys.stderr)
             os._exit(130)
         state["once"] = True
-        print("\n[ctrl-c] graceful stop... press again to force quit")
         stop_event.set()
+        print("\n[ctrl-c] stopping...", file=sys.stderr)
+        raise KeyboardInterrupt()
 
     signal.signal(signal.SIGINT, handler)
 
@@ -491,31 +501,36 @@ def run_dance(
     duration = float(len(audio)) / sr
     print(f"  song duration: {duration:.1f}s")
 
-    limits = MotionLimits(speed=speed, acc=acc)
-    dancer = ArmDancer(arm_ip, limits, dry_run=dry_run)
-
-    print("moving to home pose...")
-    dancer.go_home()
-
     stop_event = threading.Event()
-    install_sigint_handler(stop_event)
     keys = KeyboardWatcher(stop_event)
-    keys.start()
-    print("running. press q (or Ctrl-C) to stop.")
+    armed = keys.start()
+    install_sigint_handler(stop_event, on_hard_exit=keys.stop)
+    if armed:
+        print("press q / ESC / Ctrl-C to stop.")
+    else:
+        print("press Ctrl-C to stop. (q-watcher disabled: stdin is not a tty)")
 
+    limits = MotionLimits(speed=speed, acc=acc)
+    dancer = None
     recorder = None
     silent_path = None
-    if record_path:
-        silent_path = record_path + ".silent.mp4"
-        rec = Recorder(camera_index, silent_path, fps=fps)
-        if rec.open():
-            recorder = rec
-            print(f"recording from camera {camera_index} -> {record_path}")
-        else:
-            print("recording skipped")
-
     stop_audio = (lambda: None)
+
     try:
+        dancer = ArmDancer(arm_ip, limits, dry_run=dry_run)
+
+        print("moving to home pose...")
+        dancer.go_home()
+
+        if record_path:
+            silent_path = record_path + ".silent.mp4"
+            rec = Recorder(camera_index, silent_path, fps=fps)
+            if rec.open():
+                recorder = rec
+                print(f"recording -> {record_path}")
+            else:
+                print("recording skipped")
+
         if recorder is not None:
             recorder.start()
         if not no_audio:
@@ -528,40 +543,33 @@ def run_dance(
             now = time.monotonic() - t0
             sleep_for = beat_t - now
             if sleep_for > 0:
-                end = time.monotonic() + sleep_for
-                while not stop_event.is_set():
-                    remaining = end - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    time.sleep(min(0.05, remaining))
+                # stop_event.wait returns True as soon as the event is set,
+                # so q / Ctrl-C unwinds within ~0ms.
+                if stop_event.wait(timeout=sleep_for):
+                    break
             elif sleep_for < -0.5:
                 continue
-            if stop_event.is_set():
-                break
 
             code = dancer.move_to(target, wait=False)
             if code != 0 and not dry_run:
                 print(f"arm returned non-zero code {code}; aborting")
                 break
 
-        # Let the song finish if not stopped early.
         if not stop_event.is_set():
             tail = duration - (time.monotonic() - t0)
             if tail > 0:
-                end = time.monotonic() + min(tail, 5.0)
-                while not stop_event.is_set() and time.monotonic() < end:
-                    time.sleep(0.05)
+                stop_event.wait(timeout=min(tail, 5.0))
 
     except KeyboardInterrupt:
-        # Backup path; the SIGINT handler should already have set stop_event.
         stop_event.set()
     finally:
         stop_audio()
         if recorder is not None:
             recorder.stop()
         keys.stop()
-        print("halting arm...")
-        dancer.shutdown()
+        if dancer is not None:
+            print("halting arm...")
+            dancer.shutdown()
 
         if recorder is not None and silent_path and os.path.exists(silent_path):
             print("muxing audio into video...")
