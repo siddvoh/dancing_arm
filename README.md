@@ -29,10 +29,12 @@ pip install librosa sounddevice soundfile
 
 ## Run
 
+A no-copyright song is bundled at `samples/eliveta.mp3` so you can run end-to-end without finding a track first.
+
 Always start with a dry run to inspect the choreography without moving the arm:
 
 ```bash
-python dance.py /path/to/song.mp3 --dry-run
+python dance.py samples/eliveta.mp3 --dry-run
 ```
 
 When you're happy, connect to the arm. Webcam recording is on by default — the script saves an `.mp4` of the dance with the song muxed in as audio:

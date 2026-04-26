@@ -10,5 +10,9 @@ venv/
 *.flac
 *.m4a
 *.ogg
+!samples/*.mp3
+!samples/*.wav
+!samples/*.flac
+
 .idea/
 .vscode/
