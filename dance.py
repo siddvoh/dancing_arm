@@ -205,14 +205,15 @@ class KeyboardWatcher:
 
             self._fd = sys.stdin.fileno()
             if not os.isatty(self._fd):
-                return
+                return False
             self._old_tc = termios.tcgetattr(self._fd)
             tty.setcbreak(self._fd)
         except Exception:
             self._old_tc = None
-            return
+            return False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        return True
 
     def _loop(self):
         while not self.stop_event.is_set():
@@ -237,17 +238,26 @@ class KeyboardWatcher:
                 pass
 
 
-def install_sigint_handler(stop_event):
-    """First Ctrl-C: graceful stop via stop_event. Second Ctrl-C: hard exit."""
+def install_sigint_handler(stop_event, on_hard_exit=None):
+    """First Ctrl-C: set stop_event AND raise KeyboardInterrupt so any blocking
+    call in the main thread (xarm wait, time.sleep, etc.) unwinds immediately.
+    Second Ctrl-C: hard exit. on_hard_exit lets us restore the terminal first.
+    """
     state = {"once": False}
 
     def handler(signum, frame):
         if state["once"]:
-            print("\n[ctrl-c again] hard exit")
+            if on_hard_exit is not None:
+                try:
+                    on_hard_exit()
+                except Exception:
+                    pass
+            print("\n[ctrl-c again] hard exit", file=sys.stderr)
             os._exit(130)
         state["once"] = True
-        print("\n[ctrl-c] graceful stop... press again to force quit")
         stop_event.set()
+        print("\n[ctrl-c] stopping...", file=sys.stderr)
+        raise KeyboardInterrupt()
 
     signal.signal(signal.SIGINT, handler)
 
@@ -320,6 +330,11 @@ class Recorder:
         self.thread = None
         self.stop_event = threading.Event()
         self._opened = False
+        # Filled in by open(): if the sensor reports a stereo aspect ratio
+        # (e.g. ZED Mini side-by-side), we crop to the left eye for single-view output.
+        self.is_stereo = False
+        self.out_w = 0
+        self.out_h = 0
 
     def open(self):
         try:
@@ -358,17 +373,39 @@ class Recorder:
             print(f"camera {self.camera_index} not usable; using camera {idx} instead")
         self.camera_index = idx
 
+        # Try to negotiate higher resolution. Order = ZED Mini HD stereo,
+        # then common standalone-webcam HD/FullHD modes.
+        target_modes = [(2560, 720), (1920, 1080), (1280, 720)]
+        for tw, th in target_modes:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, tw)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, th)
+            aw = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            ah = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if (aw, ah) == (tw, th):
+                break
+
         w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+
+        # Re-warm after a resolution change so the first stable frame is read.
+        for _ in range(3):
+            self.cap.read()
+
+        # Aspect ratio > 2 means stereo side-by-side (ZED). Crop to left eye.
+        self.is_stereo = w > 2.0 * h
+        self.out_w = (w // 2) if self.is_stereo else w
+        self.out_h = h
+
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self.writer = cv2.VideoWriter(self.silent_path, fourcc, self.fps, (w, h))
+        self.writer = cv2.VideoWriter(self.silent_path, fourcc, self.fps, (self.out_w, self.out_h))
         if not self.writer.isOpened():
             print("VideoWriter failed to open; recording disabled.")
             self.cap.release()
             self.cap = None
             return False
 
-        print(f"camera {self.camera_index} open at {w}x{h}@{self.fps}fps")
+        suffix = " (stereo -> left-eye crop)" if self.is_stereo else ""
+        print(f"camera {self.camera_index} sensor {w}x{h} -> output {self.out_w}x{self.out_h}@{self.fps}fps{suffix}")
         self._opened = True
         return True
 
@@ -379,6 +416,8 @@ class Recorder:
             ret, frame = self.cap.read()
             if not ret:
                 continue
+            if self.is_stereo:
+                frame = frame[:, : self.out_w]
             self.writer.write(frame)
             next_due += period
             sleep_for = next_due - time.monotonic()
@@ -491,31 +530,36 @@ def run_dance(
     duration = float(len(audio)) / sr
     print(f"  song duration: {duration:.1f}s")
 
-    limits = MotionLimits(speed=speed, acc=acc)
-    dancer = ArmDancer(arm_ip, limits, dry_run=dry_run)
-
-    print("moving to home pose...")
-    dancer.go_home()
-
     stop_event = threading.Event()
-    install_sigint_handler(stop_event)
     keys = KeyboardWatcher(stop_event)
-    keys.start()
-    print("running. press q (or Ctrl-C) to stop.")
+    armed = keys.start()
+    install_sigint_handler(stop_event, on_hard_exit=keys.stop)
+    if armed:
+        print("press q / ESC / Ctrl-C to stop.")
+    else:
+        print("press Ctrl-C to stop. (q-watcher disabled: stdin is not a tty)")
 
+    limits = MotionLimits(speed=speed, acc=acc)
+    dancer = None
     recorder = None
     silent_path = None
-    if record_path:
-        silent_path = record_path + ".silent.mp4"
-        rec = Recorder(camera_index, silent_path, fps=fps)
-        if rec.open():
-            recorder = rec
-            print(f"recording from camera {camera_index} -> {record_path}")
-        else:
-            print("recording skipped")
-
     stop_audio = (lambda: None)
+
     try:
+        dancer = ArmDancer(arm_ip, limits, dry_run=dry_run)
+
+        print("moving to home pose...")
+        dancer.go_home()
+
+        if record_path:
+            silent_path = record_path + ".silent.mp4"
+            rec = Recorder(camera_index, silent_path, fps=fps)
+            if rec.open():
+                recorder = rec
+                print(f"recording -> {record_path}")
+            else:
+                print("recording skipped")
+
         if recorder is not None:
             recorder.start()
         if not no_audio:
@@ -528,40 +572,33 @@ def run_dance(
             now = time.monotonic() - t0
             sleep_for = beat_t - now
             if sleep_for > 0:
-                end = time.monotonic() + sleep_for
-                while not stop_event.is_set():
-                    remaining = end - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    time.sleep(min(0.05, remaining))
+                # stop_event.wait returns True as soon as the event is set,
+                # so q / Ctrl-C unwinds within ~0ms.
+                if stop_event.wait(timeout=sleep_for):
+                    break
             elif sleep_for < -0.5:
                 continue
-            if stop_event.is_set():
-                break
 
             code = dancer.move_to(target, wait=False)
             if code != 0 and not dry_run:
                 print(f"arm returned non-zero code {code}; aborting")
                 break
 
-        # Let the song finish if not stopped early.
         if not stop_event.is_set():
             tail = duration - (time.monotonic() - t0)
             if tail > 0:
-                end = time.monotonic() + min(tail, 5.0)
-                while not stop_event.is_set() and time.monotonic() < end:
-                    time.sleep(0.05)
+                stop_event.wait(timeout=min(tail, 5.0))
 
     except KeyboardInterrupt:
-        # Backup path; the SIGINT handler should already have set stop_event.
         stop_event.set()
     finally:
         stop_audio()
         if recorder is not None:
             recorder.stop()
         keys.stop()
-        print("halting arm...")
-        dancer.shutdown()
+        if dancer is not None:
+            print("halting arm...")
+            dancer.shutdown()
 
         if recorder is not None and silent_path and os.path.exists(silent_path):
             print("muxing audio into video...")
