@@ -11,6 +11,9 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import select
+import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -153,19 +156,102 @@ class ArmDancer:
             radius=0.0,
         )
 
-    def shutdown(self):
+    def halt_in_place(self):
+        """Preempt any queued motion by sending the current pose as target."""
         if self.dry_run or self._arm is None:
             return
         try:
-            self._arm.set_servo_angle(
-                angle=[0.0] * 7,
-                speed=self.limits.speed,
-                mvacc=self.limits.acc,
-                wait=True,
-                radius=0.0,
-            )
-        finally:
+            code, angles = self._arm.get_servo_angle()
+            if code == 0 and angles:
+                self._arm.set_servo_angle(
+                    angle=angles[:7],
+                    speed=self.limits.speed,
+                    mvacc=self.limits.acc,
+                    wait=False,
+                    radius=0.0,
+                )
+        except Exception:
+            pass
+
+    def shutdown(self):
+        """Halt where we are and disconnect. Fast — no slow return-to-zero."""
+        if self.dry_run or self._arm is None:
+            return
+        self.halt_in_place()
+        try:
             self._arm.disconnect()
+        except Exception:
+            pass
+
+
+class KeyboardWatcher:
+    """Background thread that sets stop_event when the user presses q / ESC.
+
+    Uses cbreak (not raw) so Ctrl-C still raises SIGINT normally and is handled
+    by our signal handler. If stdin isn't a tty (e.g. piped), it silently
+    no-ops — Ctrl-C still works.
+    """
+
+    QUIT_KEYS = {"q", "Q", "\x1b"}  # q, Q, ESC
+
+    def __init__(self, stop_event):
+        self.stop_event = stop_event
+        self._thread = None
+        self._fd = None
+        self._old_tc = None
+
+    def start(self):
+        try:
+            import termios
+            import tty
+
+            self._fd = sys.stdin.fileno()
+            if not os.isatty(self._fd):
+                return
+            self._old_tc = termios.tcgetattr(self._fd)
+            tty.setcbreak(self._fd)
+        except Exception:
+            self._old_tc = None
+            return
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self):
+        while not self.stop_event.is_set():
+            try:
+                r, _, _ = select.select([self._fd], [], [], 0.1)
+                if not r:
+                    continue
+                ch = sys.stdin.read(1)
+                if ch in self.QUIT_KEYS:
+                    print(f"\n[{ch if ch != chr(27) else 'esc'}] received -> graceful stop")
+                    self.stop_event.set()
+                    return
+            except Exception:
+                return
+
+    def stop(self):
+        if self._old_tc is not None and self._fd is not None:
+            try:
+                import termios
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._old_tc)
+            except Exception:
+                pass
+
+
+def install_sigint_handler(stop_event):
+    """First Ctrl-C: graceful stop via stop_event. Second Ctrl-C: hard exit."""
+    state = {"once": False}
+
+    def handler(signum, frame):
+        if state["once"]:
+            print("\n[ctrl-c again] hard exit")
+            os._exit(130)
+        state["once"] = True
+        print("\n[ctrl-c] graceful stop... press again to force quit")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, handler)
 
 
 class _Tee:
@@ -392,6 +478,12 @@ def run_dance(
     print("moving to home pose...")
     dancer.go_home()
 
+    stop_event = threading.Event()
+    install_sigint_handler(stop_event)
+    keys = KeyboardWatcher(stop_event)
+    keys.start()
+    print("running. press q (or Ctrl-C) to stop.")
+
     recorder = None
     silent_path = None
     if record_path:
@@ -412,37 +504,44 @@ def run_dance(
         t0 = time.monotonic()
 
         for beat_t, target in choreography:
+            if stop_event.is_set():
+                break
             now = time.monotonic() - t0
             sleep_for = beat_t - now
             if sleep_for > 0:
-                # Sleep in small slices so Ctrl-C is responsive.
                 end = time.monotonic() + sleep_for
-                while True:
+                while not stop_event.is_set():
                     remaining = end - time.monotonic()
                     if remaining <= 0:
                         break
                     time.sleep(min(0.05, remaining))
             elif sleep_for < -0.5:
-                # We fell behind by more than half a second; skip this beat.
                 continue
+            if stop_event.is_set():
+                break
 
             code = dancer.move_to(target, wait=False)
             if code != 0 and not dry_run:
                 print(f"arm returned non-zero code {code}; aborting")
                 break
 
-        # Let the song finish playing if there's tail audio after the last beat.
-        tail = duration - (time.monotonic() - t0)
-        if tail > 0:
-            time.sleep(min(tail, 5.0))
+        # Let the song finish if not stopped early.
+        if not stop_event.is_set():
+            tail = duration - (time.monotonic() - t0)
+            if tail > 0:
+                end = time.monotonic() + min(tail, 5.0)
+                while not stop_event.is_set() and time.monotonic() < end:
+                    time.sleep(0.05)
 
     except KeyboardInterrupt:
-        print("\ninterrupted by user")
+        # Backup path; the SIGINT handler should already have set stop_event.
+        stop_event.set()
     finally:
         stop_audio()
         if recorder is not None:
             recorder.stop()
-        print("returning to zero pose...")
+        keys.stop()
+        print("halting arm...")
         dancer.shutdown()
 
         if recorder is not None and silent_path and os.path.exists(silent_path):
@@ -453,7 +552,16 @@ def run_dance(
                     os.remove(silent_path)
                 except OSError:
                     pass
-                print(f"saved: {record_path}")
+                print(f"saved (with audio): {record_path}")
+            else:
+                # Mux failed or ffmpeg missing — rename so user always has a video.
+                fallback = os.path.splitext(record_path)[0] + ".silent.mp4"
+                try:
+                    shutil.move(silent_path, fallback)
+                    print(f"saved (silent only): {fallback}")
+                    print("re-mux later with: ffmpeg -i <silent.mp4> -i <song> -c:v copy -c:a aac -shortest <out.mp4>")
+                except OSError:
+                    print(f"silent video at: {silent_path}")
 
         print("done.")
 

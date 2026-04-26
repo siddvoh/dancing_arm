@@ -15,8 +15,8 @@ venv/
 !samples/*.flac
 
 # runs/ is intentionally tracked so logs and recorded videos can be pushed
-# back for analysis. The intermediate silent file is excluded.
-runs/*.silent.mp4
+# back for analysis. (Silent fallback files are kept too so we can see the
+# raw webcam capture when ffmpeg mux didn't run.)
 
 .idea/
 .vscode/

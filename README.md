@@ -64,6 +64,18 @@ For high-BPM songs, dance on every other beat:
 python dance.py /path/to/song.mp3 --every-nth 2
 ```
 
+## Stopping the dance
+
+While the script is running you can stop it with any of:
+
+- press `q` (or `Q`, or `ESC`) in the terminal
+- press `Ctrl-C` (first press = graceful stop, second press = hard kill)
+
+Graceful stop halts the arm at its current pose, finishes recording, muxes the song into the saved video, then disconnects. The video is always written:
+
+- if `ffmpeg` succeeds: `runs/dance_<song>_<ts>.mp4` with audio
+- if `ffmpeg` fails or isn't installed: `runs/dance_<song>_<ts>.silent.mp4` (no audio, can be remuxed later)
+
 ## Safety design
 
 This script is intentionally conservative. The arm will not be sent into wild swings.
