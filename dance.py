@@ -25,11 +25,14 @@ HOME_POSE_DEG = [0.0, 20.0, 0.0, 60.0, 0.0, 40.0, 0.0]
 MAX_JOINT_DELTA_DEG = [25.0, 20.0, 25.0, 20.0, 30.0, 20.0, 60.0]
 
 # Conservative motion caps. Speed is in deg/s, acceleration in deg/s^2.
-DEFAULT_SPEED_DEG_S = 35.0
-DEFAULT_ACC_DEG_S2 = 400.0
+# Matches the visual_servoing defaults (_angle_speed=20, _angle_acc=500) with
+# a small bump on speed for groove. Verified safe on this user's xArm 7.
+DEFAULT_SPEED_DEG_S = 25.0
+DEFAULT_ACC_DEG_S2 = 500.0
 
 # If beats arrive faster than the arm can comfortably react, we down-sample.
-MIN_MOVE_PERIOD_S = 0.45
+# At 25 deg/s a typical 12 deg pose move takes ~0.5s, so we throttle to 0.5s.
+MIN_MOVE_PERIOD_S = 0.50
 
 # Pose bank: joint deltas (degrees) added to HOME_POSE_DEG.
 # Each row is a "dance shape" — small offsets that look expressive but stay
@@ -37,16 +40,16 @@ MIN_MOVE_PERIOD_S = 0.45
 # wrist twirl -> mirror) so cycling through them on beats reads as dance.
 POSE_BANK = [
     # j1   j2     j3     j4     j5     j6    j7
-    [ 15,  -8,    0,    -10,    0,     -5,   25],   # lean right + wrist roll
-    [-15,  -8,    0,    -10,    0,     -5,  -25],   # mirror left
-    [  0, -15,    0,    -15,    0,    -10,    0],   # bow forward
-    [  0,  10,    0,     10,    0,     10,    0],   # rise up
-    [ 20,   0,  -15,      0,   25,      0,   45],   # spiral right
-    [-20,   0,   15,      0,  -25,      0,  -45],   # spiral left
-    [  0,  -5,    0,      5,    0,     15,   30],   # head nod 1
-    [  0,  -5,    0,      5,    0,     15,  -30],   # head nod 2
-    [ 10,   5,  -10,    -10,   15,     -5,    0],   # groove A
-    [-10,   5,   10,    -10,  -15,     -5,    0],   # groove B
+    [ 12,  -6,    0,     -8,    0,     -4,   15],   # lean right + wrist roll
+    [-12,  -6,    0,     -8,    0,     -4,  -15],   # mirror left
+    [  0, -12,    0,    -12,    0,     -8,    0],   # bow forward
+    [  0,   8,    0,      8,    0,      8,    0],   # rise up
+    [ 15,   0,  -10,      0,   18,      0,   20],   # spiral right
+    [-15,   0,   10,      0,  -18,      0,  -20],   # spiral left
+    [  0,  -4,    0,      4,    0,     12,   18],   # head nod 1
+    [  0,  -4,    0,      4,    0,     12,  -18],   # head nod 2
+    [  8,   4,   -8,     -8,   12,     -4,    0],   # groove A
+    [ -8,   4,    8,     -8,  -12,     -4,    0],   # groove B
 ]
 
 
@@ -263,7 +266,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.speed > 80 or args.acc > 1500:
+    if args.speed > 50 or args.acc > 1000:
         print(
             f"refusing to run with speed={args.speed}, acc={args.acc}: above safe envelope. "
             f"edit the script if you really want this.",

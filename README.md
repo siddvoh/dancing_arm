@@ -41,9 +41,9 @@ python dance.py /path/to/song.mp3 --every-nth 2
 
 This script is intentionally conservative. The arm will not be sent into wild swings.
 
-- All target poses are clipped to a per-joint envelope around a comfortable home pose (`HOME_POSE_DEG` and `MAX_JOINT_DELTA_DEG` in `dance.py`).
-- Default joint speed is `35 deg/s`, default acceleration `400 deg/s^2`. Hard refuses values above `80 deg/s` / `1500 deg/s^2`.
-- Beat throttle (`MIN_MOVE_PERIOD_S = 0.45s`) drops beats that arrive too close together, so fast songs don't whip the arm.
+- All target poses are clipped to a per-joint envelope around a comfortable home pose (`HOME_POSE_DEG` and `MAX_JOINT_DELTA_DEG` in `dance.py`). Envelope verified inside published xArm 7 joint limits with wide margin.
+- Default joint speed is `25 deg/s`, default acceleration `500 deg/s^2` — the same range used in the user's `visual_servoing_for_suction_grippers` repo. Hard refuses values above `50 deg/s` / `1000 deg/s^2`.
+- Beat throttle (`MIN_MOVE_PERIOD_S = 0.50s`) drops beats that arrive too close together, so fast songs don't whip the arm.
 - On startup the arm moves to home before any beat command is sent. On shutdown it returns to zero pose.
 - `--dry-run` runs the full pipeline (audio analysis, scheduling, audio playback) without ever connecting to the arm.
 
