@@ -1,0 +1,35 @@
+SDK_VERSION: 1.17.3
+=== run started ===
+  timestamp: 2026-04-26T18:27:35
+  platform: Linux-6.17.0-20-generic-x86_64-with-glibc2.39
+  python: 3.10.20
+  arm_ip: 192.168.1.241
+  ping_rc: 0
+  ping_tail: rtt min/avg/max/mdev = 0.162/0.162/0.162/0.000 ms
+  xarm_sdk: 1.17.3
+  audio_path: /home/akanksha/repo/dancing_arm/samples/eliveta.mp3
+  speed: 25.0 deg/s, acc: 500.0 deg/s^2, every_nth: 1
+  dry_run: False, record_path: /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_182735.mp4, camera: 0
+
+loading + analyzing: /home/akanksha/repo/dancing_arm/samples/eliveta.mp3
+  tempo ~ 110.0 BPM, 162 usable beats after throttle
+  song duration: 93.9s
+ROBOT_IP: 192.168.1.241, VERSION: v2.5.5, PROTOCOL: V1, DETAIL: 7,7,XS1305,MC1303,v2.5.5, TYPE1300: [1, 1]
+change protocol identifier to 3
+[motion_enable], xArm is not ready to move
+[set_state], xArm is ready to move
+moving to home pose...
+running. press q (or Ctrl-C) to stop.
+could not open camera 0; try --camera 1 if the ZED is on a different index.
+recording skipped
+
+[ctrl-c] graceful stop... press again to force quit
+halting arm...
+done.
+log saved: /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_182735.log
+
+to share this run for analysis, push from the repo root:
+  cd /home/akanksha/repo/dancing_arm
+  git add runs/dance_eliveta_20260426_182735.log
+  git commit -m "run: dance_eliveta_20260426_182735.mp4"
+  git push
