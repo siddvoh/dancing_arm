@@ -1,0 +1,16 @@
+SDK_VERSION: 1.17.3
+=== run started ===
+  timestamp: 2026-04-26T18:16:43
+  platform: Linux-6.17.0-20-generic-x86_64-with-glibc2.39
+  python: 3.10.20
+  arm_ip: 192.168.1.248
+  ping_rc: 1
+  ping_tail: 1 packets transmitted, 0 received, 100% packet loss, time 0ms
+  xarm_sdk: 1.17.3
+  audio_path: /home/akanksha/repo/dancing_arm/samples/eliveta.mp3
+  speed: 25.0 deg/s, acc: 500.0 deg/s^2, every_nth: 1
+  dry_run: False, record_path: /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_181643.mp4, camera: 0
+
+loading + analyzing: /home/akanksha/repo/dancing_arm/samples/eliveta.mp3
+  tempo ~ 110.0 BPM, 162 usable beats after throttle
+  song duration: 93.9s
