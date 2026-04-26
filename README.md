@@ -29,21 +29,27 @@ pip install librosa sounddevice soundfile
 
 ## Run
 
-A no-copyright song is bundled at `samples/eliveta.mp3` so you can run end-to-end without finding a track first.
+A no-copyright song is bundled at `samples/eliveta.mp3` and is the default audio. You can run with no arguments at all.
 
-Always start with a dry run to inspect the choreography without moving the arm:
-
-```bash
-python dance.py samples/eliveta.mp3 --dry-run
-```
-
-When you're happy, connect to the arm. Webcam recording is on by default — the script saves an `.mp4` of the dance with the song muxed in as audio:
+Dry run (preview choreography, no arm motion, no recording):
 
 ```bash
-python dance.py /path/to/song.mp3
+python3 dance.py --dry-run --no-record
 ```
 
-Output file is auto-named `dance_<song>_<timestamp>.mp4` in the current directory. Override with `--record-path out.mp4` or disable with `--no-record`.
+When you're happy, connect to the arm. Webcam recording is on by default and outputs land in `runs/`:
+
+```bash
+python3 dance.py
+```
+
+Each run writes:
+- `runs/dance_<song>_<timestamp>.mp4` — webcam video with the song muxed as audio
+- `runs/dance_<song>_<timestamp>.log` — full stdout log including detected tempo, arm IP / ping, motion params
+
+Override the video path with `--record-path out.mp4` or disable recording with `--no-record`.
+
+The `runs/` directory is tracked in git so you can push runs back to the repo for analysis. The script prints the exact `git add / commit / push` lines at the end of each run.
 
 For the ZED Mini in webcam mode, point at the right camera index:
 

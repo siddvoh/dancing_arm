@@ -21,6 +21,10 @@ from datetime import datetime
 import numpy as np
 
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_AUDIO = os.path.join(SCRIPT_DIR, "samples", "eliveta.mp3")
+DEFAULT_RUNS_DIR = os.path.join(SCRIPT_DIR, "runs")
+
 HOME_POSE_DEG = [0.0, 20.0, 0.0, 60.0, 0.0, 40.0, 0.0]
 
 # Per-joint maximum allowed deviation from HOME_POSE_DEG. Anything in the pose
@@ -164,6 +168,56 @@ class ArmDancer:
             self._arm.disconnect()
 
 
+class _Tee:
+    """Duplicate writes across multiple streams. Used to mirror stdout to a log."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            try:
+                s.write(data)
+                s.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def _capture_env(arm_ip):
+    """Snapshot the running environment for postmortem analysis."""
+    import platform
+
+    info = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "platform": platform.platform(),
+        "python": sys.version.split()[0],
+        "arm_ip": arm_ip,
+    }
+    try:
+        out = subprocess.run(
+            ["ping", "-c", "1", "-W", "1", arm_ip],
+            capture_output=True, text=True, timeout=3,
+        )
+        info["ping_rc"] = out.returncode
+        info["ping_tail"] = out.stdout.strip().splitlines()[-1] if out.stdout else ""
+    except Exception as e:
+        info["ping_rc"] = "error"
+        info["ping_tail"] = str(e)
+    try:
+        from xarm import version as xarm_version
+        info["xarm_sdk"] = xarm_version.__version__
+    except Exception:
+        info["xarm_sdk"] = "unknown"
+    return info
+
+
 class Recorder:
     """Webcam recorder that runs in a background thread, then muxes the
     original audio file into the saved video via ffmpeg.
@@ -304,7 +358,23 @@ def run_dance(
     record_path=None,
     camera_index=0,
     fps=30,
+    log_path=None,
 ):
+    log_file = None
+    real_stdout = sys.stdout
+    if log_path:
+        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+        log_file = open(log_path, "w")
+        sys.stdout = _Tee(real_stdout, log_file)
+
+    env = _capture_env(arm_ip)
+    print("=== run started ===")
+    for k, v in env.items():
+        print(f"  {k}: {v}")
+    print(f"  audio_path: {audio_path}")
+    print(f"  speed: {speed} deg/s, acc: {acc} deg/s^2, every_nth: {every_nth}")
+    print(f"  dry_run: {dry_run}, record_path: {record_path}, camera: {camera_index}")
+    print()
     print(f"loading + analyzing: {audio_path}")
     beat_times, tempo, sr, audio = detect_beats(audio_path, every_nth=every_nth)
     print(f"  tempo ~ {tempo:.1f} BPM, {len(beat_times)} usable beats after throttle")
@@ -387,10 +457,32 @@ def run_dance(
 
         print("done.")
 
+        if log_path:
+            print(f"log saved: {log_path}")
+
+        artifacts = [p for p in (record_path, log_path) if p and os.path.exists(p)]
+        if artifacts:
+            rels = [os.path.relpath(p, SCRIPT_DIR) for p in artifacts]
+            print()
+            print("to share this run for analysis, push from the repo root:")
+            print(f"  cd {SCRIPT_DIR}")
+            print("  git add " + " ".join(rels))
+            print(f'  git commit -m "run: {os.path.basename(record_path or log_path)}"')
+            print("  git push")
+
+        if log_file is not None:
+            sys.stdout = real_stdout
+            log_file.close()
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="Make the xArm dance to a song.")
-    p.add_argument("audio", help="path to audio file (mp3/wav/flac/...)")
+    p.add_argument(
+        "audio",
+        nargs="?",
+        default=DEFAULT_AUDIO,
+        help=f"path to audio file (default: bundled samples/eliveta.mp3)",
+    )
     p.add_argument("--ip", default="192.168.1.200", help="xArm IP (default: 192.168.1.200)")
     p.add_argument(
         "--every-nth",
@@ -423,14 +515,20 @@ def main():
         )
         sys.exit(2)
 
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = os.path.splitext(os.path.basename(args.audio))[0]
+    stem = f"dance_{base}_{ts}"
+
     if args.no_record:
         record_path = None
     elif args.record_path:
         record_path = args.record_path
     else:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = os.path.splitext(os.path.basename(args.audio))[0]
-        record_path = f"dance_{base}_{ts}.mp4"
+        os.makedirs(DEFAULT_RUNS_DIR, exist_ok=True)
+        record_path = os.path.join(DEFAULT_RUNS_DIR, f"{stem}.mp4")
+
+    os.makedirs(DEFAULT_RUNS_DIR, exist_ok=True)
+    log_path = os.path.join(DEFAULT_RUNS_DIR, f"{stem}.log")
 
     run_dance(
         audio_path=args.audio,
@@ -443,6 +541,7 @@ def main():
         record_path=record_path,
         camera_index=args.camera,
         fps=args.fps,
+        log_path=log_path,
     )
 
 
