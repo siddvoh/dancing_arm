@@ -1,0 +1,36 @@
+SDK_VERSION: 1.17.3
+=== run started ===
+  timestamp: 2026-04-26T18:48:56
+  platform: Linux-6.17.0-20-generic-x86_64-with-glibc2.39
+  python: 3.10.20
+  arm_ip: 192.168.1.241
+  ping_rc: 0
+  ping_tail: rtt min/avg/max/mdev = 0.170/0.170/0.170/0.000 ms
+  xarm_sdk: 1.17.3
+  audio_path: /home/akanksha/repo/dancing_arm/samples/eliveta.mp3
+  speed: 12.0 deg/s, acc: 300.0 deg/s^2, every_nth: 1
+  dry_run: False, record_path: /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_184856.mp4, camera: 0
+
+loading + analyzing: /home/akanksha/repo/dancing_arm/samples/eliveta.mp3
+  tempo ~ 110.0 BPM, 83 usable beats after throttle
+  song duration: 93.9s
+press q / ESC / Ctrl-C to stop.
+ROBOT_IP: 192.168.1.241, VERSION: v2.5.5, PROTOCOL: V1, DETAIL: 7,7,XS1305,MC1303,v2.5.5, TYPE1300: [1, 1]
+change protocol identifier to 3
+[motion_enable], xArm is not ready to move
+[set_state], xArm is ready to move
+moving to home pose...
+camera 0 not usable; using camera 1 instead
+camera 1 sensor 2560x720 -> output 1280x720@30fps (stereo -> left-eye crop)
+recording -> /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_184856.mp4
+halting arm...
+muxing audio into video...
+saved (with audio): /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_184856.mp4
+done.
+log saved: /home/akanksha/repo/dancing_arm/runs/dance_eliveta_20260426_184856.log
+
+to share this run for analysis, push from the repo root:
+  cd /home/akanksha/repo/dancing_arm
+  git add runs/dance_eliveta_20260426_184856.mp4 runs/dance_eliveta_20260426_184856.log
+  git commit -m "run: dance_eliveta_20260426_184856.mp4"
+  git push
