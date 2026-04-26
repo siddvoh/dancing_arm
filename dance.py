@@ -330,6 +330,11 @@ class Recorder:
         self.thread = None
         self.stop_event = threading.Event()
         self._opened = False
+        # Filled in by open(): if the sensor reports a stereo aspect ratio
+        # (e.g. ZED Mini side-by-side), we crop to the left eye for single-view output.
+        self.is_stereo = False
+        self.out_w = 0
+        self.out_h = 0
 
     def open(self):
         try:
@@ -368,17 +373,39 @@ class Recorder:
             print(f"camera {self.camera_index} not usable; using camera {idx} instead")
         self.camera_index = idx
 
+        # Try to negotiate higher resolution. Order = ZED Mini HD stereo,
+        # then common standalone-webcam HD/FullHD modes.
+        target_modes = [(2560, 720), (1920, 1080), (1280, 720)]
+        for tw, th in target_modes:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, tw)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, th)
+            aw = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            ah = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if (aw, ah) == (tw, th):
+                break
+
         w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+
+        # Re-warm after a resolution change so the first stable frame is read.
+        for _ in range(3):
+            self.cap.read()
+
+        # Aspect ratio > 2 means stereo side-by-side (ZED). Crop to left eye.
+        self.is_stereo = w > 2.0 * h
+        self.out_w = (w // 2) if self.is_stereo else w
+        self.out_h = h
+
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self.writer = cv2.VideoWriter(self.silent_path, fourcc, self.fps, (w, h))
+        self.writer = cv2.VideoWriter(self.silent_path, fourcc, self.fps, (self.out_w, self.out_h))
         if not self.writer.isOpened():
             print("VideoWriter failed to open; recording disabled.")
             self.cap.release()
             self.cap = None
             return False
 
-        print(f"camera {self.camera_index} open at {w}x{h}@{self.fps}fps")
+        suffix = " (stereo -> left-eye crop)" if self.is_stereo else ""
+        print(f"camera {self.camera_index} sensor {w}x{h} -> output {self.out_w}x{self.out_h}@{self.fps}fps{suffix}")
         self._opened = True
         return True
 
@@ -389,6 +416,8 @@ class Recorder:
             ret, frame = self.cap.read()
             if not ret:
                 continue
+            if self.is_stereo:
+                frame = frame[:, : self.out_w]
             self.writer.write(frame)
             next_due += period
             sleep_for = next_due - time.monotonic()
