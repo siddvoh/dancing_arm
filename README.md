@@ -81,8 +81,9 @@ Graceful stop halts the arm at its current pose, finishes recording, muxes the s
 This script is intentionally conservative. The arm will not be sent into wild swings.
 
 - All target poses are clipped to a per-joint envelope around a comfortable home pose (`HOME_POSE_DEG` and `MAX_JOINT_DELTA_DEG` in `dance.py`). Envelope verified inside published xArm 7 joint limits with wide margin.
-- Default joint speed is `25 deg/s`, default acceleration `500 deg/s^2` — the same range used in the user's `visual_servoing_for_suction_grippers` repo. Hard refuses values above `50 deg/s` / `1000 deg/s^2`.
-- Beat throttle (`MIN_MOVE_PERIOD_S = 0.50s`) drops beats that arrive too close together, so fast songs don't whip the arm.
+- Default joint speed `12 deg/s`, accel `300 deg/s^2` — gentle. Hard refuses values above `35 deg/s` / `800 deg/s^2`. (Bump with `--speed N --acc N` once you're confident.)
+- Beat throttle (`MIN_MOVE_PERIOD_S = 0.75s`) drops beats that arrive too close together, so fast songs don't whip the arm.
+- Camera index falls back: if `--camera 0` doesn't open, the script scans indices 0..9 and uses the first working device — works regardless of whether the ZED Mini, a USB webcam, or anything else is plugged in.
 - On startup the arm moves to home before any beat command is sent. On shutdown it returns to zero pose.
 - `--dry-run` runs the full pipeline (audio analysis, scheduling, audio playback) without ever connecting to the arm.
 

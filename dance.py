@@ -34,15 +34,13 @@ HOME_POSE_DEG = [0.0, 20.0, 0.0, 60.0, 0.0, 40.0, 0.0]
 # bank or generated at runtime is clipped to this envelope before being sent.
 MAX_JOINT_DELTA_DEG = [25.0, 20.0, 25.0, 20.0, 30.0, 20.0, 60.0]
 
-# Conservative motion caps. Speed is in deg/s, acceleration in deg/s^2.
-# Matches the visual_servoing defaults (_angle_speed=20, _angle_acc=500) with
-# a small bump on speed for groove. Verified safe on this user's xArm 7.
-DEFAULT_SPEED_DEG_S = 25.0
-DEFAULT_ACC_DEG_S2 = 500.0
+# Slow, gentle motion caps. Tuned down after the first live run looked too
+# fast at 25 deg/s. Speed in deg/s, acceleration in deg/s^2.
+DEFAULT_SPEED_DEG_S = 12.0
+DEFAULT_ACC_DEG_S2 = 300.0
 
-# If beats arrive faster than the arm can comfortably react, we down-sample.
-# At 25 deg/s a typical 12 deg pose move takes ~0.5s, so we throttle to 0.5s.
-MIN_MOVE_PERIOD_S = 0.50
+# Drop beats that come faster than this minimum interval. Higher = calmer.
+MIN_MOVE_PERIOD_S = 0.75
 
 # Pose bank: joint deltas (degrees) added to HOME_POSE_DEG.
 # Each row is a "dance shape" — small offsets that look expressive but stay
@@ -330,15 +328,35 @@ class Recorder:
             print("opencv-python not installed; recording disabled.")
             return False
 
-        self.cap = cv2.VideoCapture(self.camera_index)
-        if not self.cap.isOpened():
-            print(f"could not open camera {self.camera_index}; try --camera 1 if the ZED is on a different index.")
+        # Try the preferred index first, then scan for any working camera.
+        candidates = [self.camera_index]
+        candidates.extend(i for i in range(10) if i != self.camera_index)
+
+        chosen = None
+        for idx in candidates:
+            cap = cv2.VideoCapture(idx)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            ok = False
+            for _ in range(5):
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    ok = True
+                    break
+            if ok:
+                chosen = (idx, cap)
+                break
+            cap.release()
+
+        if chosen is None:
+            print("no usable camera found (scanned indices 0..9); recording disabled.")
             return False
 
-        # Warm up the camera and discard the first few frames; first reads on
-        # macOS can be slow and may return black frames.
-        for _ in range(5):
-            self.cap.read()
+        idx, self.cap = chosen
+        if idx != self.camera_index:
+            print(f"camera {self.camera_index} not usable; using camera {idx} instead")
+        self.camera_index = idx
 
         w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
@@ -350,6 +368,7 @@ class Recorder:
             self.cap = None
             return False
 
+        print(f"camera {self.camera_index} open at {w}x{h}@{self.fps}fps")
         self._opened = True
         return True
 
@@ -615,7 +634,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.speed > 50 or args.acc > 1000:
+    if args.speed > 35 or args.acc > 800:
         print(
             f"refusing to run with speed={args.speed}, acc={args.acc}: above safe envelope. "
             f"edit the script if you really want this.",
